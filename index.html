@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WinMind Web · 文本 ➜ 思维导图（单文件）</title>
+<style>
+  :root{
+    --bg:#0b0c10; --fg:#e6e6e6; --muted:#9aa3b2; --accent:#6ee7ff;
+    --node-bg:#11151a; --node-stroke:#3a424f; --edge:#475569; --edge-strong:#93c5fd;
+    --panel:#0f141b; --panel-stroke:#1f2937; --btn:#1f2a37; --btn-hover:#2a3645; --ok:#34d399; --warn:#f59e0b;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial}
+  .topbar{display:flex;align-items:center;gap:.5rem;padding:.5rem .75rem;border-bottom:1px solid var(--panel-stroke);background:linear-gradient(180deg,rgba(255,255,255,.02),transparent)}
+  .topbar .brand{font-weight:700;letter-spacing:.3px}
+  .btn{background:var(--btn);border:1px solid var(--panel-stroke);color:var(--fg);padding:.35rem .6rem;border-radius:.5rem;cursor:pointer}
+  .btn:hover{background:var(--btn-hover)}
+  .btn.ghost{background:transparent}
+  .sel{background:var(--btn);border:1px solid var(--panel-stroke);color:var(--fg);padding:.35rem .6rem;border-radius:.5rem}
+  .wrap{display:grid;grid-template-columns: 1fr 1.3fr; height: calc(100% - 46px)}
+  .editor{display:flex;flex-direction:column;border-right:1px solid var(--panel-stroke)}
+  .editor .hdr{display:flex;align-items:center;gap:.5rem;padding:.5rem .75rem;border-bottom:1px solid var(--panel-stroke);background:var(--panel)}
+  textarea{flex:1;width:100%;padding:1rem;border:0;outline:none;background:#0b1117;color:var(--fg);resize:none;font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace}
+  .stage{position:relative}
+  #svg{display:block;width:100%;height:100%;background:radial-gradient(ellipse at center, rgba(255,255,255,.03), transparent 60%), linear-gradient(transparent 49px, rgba(255,255,255,.03) 50px), linear-gradient(90deg, transparent 49px, rgba(255,255,255,.03) 50px); background-size: 100% 100%, 50px 50px, 50px 50px}
+  .footer{position:absolute;left:.75rem;bottom:.75rem;background:rgba(0,0,0,.35);backdrop-filter: blur(6px);padding:.35rem .6rem;border-radius:.5rem;color:var(--muted)}
+  .hint{color:var(--muted);font-size:12px}
+  .pill{display:inline-flex;align-items:center;gap:.35rem;background:#0c1118;border:1px solid #1e293b;padding:.25rem .5rem;border-radius:999px}
+  .kbd{padding:.05rem .35rem;border-radius:.35rem;background:#111827;border:1px solid #1f2937;color:#cbd5e1;font-size:12px}
+  .node{filter: drop-shadow(0 1px 0 rgba(255,255,255,.02)) drop-shadow(0 10px 14px rgba(0,0,0,.35));}
+  .node rect{fill:var(--node-bg); stroke:var(--node-stroke);}
+  .node text{font-size:13px; fill:var(--fg)}
+  .node.selected rect{stroke:var(--accent); stroke-width:2}
+  .edge{stroke:var(--edge); stroke-width:1.2; fill:none}
+  .edge.strong{stroke:var(--edge-strong); stroke-width:1.5}
+  .toolbar{display:flex;gap:.4rem;flex-wrap:wrap}
+  input[type="file"]{display:none}
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand">WinMind Web</div>
+    <div class="toolbar">
+      <button class="btn" id="btnExportOPML">导出 OPML</button>
+      <button class="btn" id="btnExportMM">导出 FreeMind(.mm)</button>
+      <button class="btn" id="btnExportMD">导出 Markdown</button>
+      <button class="btn" id="btnExportSVG">导出 SVG</button>
+      <button class="btn" id="btnExportPNG">导出 PNG</button>
+      <label class="btn" for="fileInput">导入…</label>
+      <input id="fileInput" type="file" accept=".opml,.mm,.md,.markdown,.txt,.json,.svg" />
+      <select class="sel" id="layoutSel">
+        <option value="lr">左右树</option>
+        <option value="radial">径向</option>
+      </select>
+      <span class="pill">自动渲染 <input id="autoChk" type="checkbox" checked style="accent-color:#22d3ee"></span>
+    </div>
+  </div>
+  <div class="wrap">
+    <div class="editor">
+      <div class="hdr">
+        <strong>文本大纲</strong>
+        <span class="hint">支持中文编号（“一、（一）、1.、①、•”等）与缩进</span>
+        <span style="flex:1"></span>
+        <span class="pill">渲染 <span id="ms"></span> ms</span>
+      </div>
+      <textarea id="src"></textarea>
+    </div>
+    <div class="stage">
+      <svg id="svg" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" tabindex="0">
+        <defs>
+          <marker id="arrow" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--edge)"/></marker>
+        </defs>
+        <g id="viewport">
+          <g id="edges"></g>
+          <g id="nodes"></g>
+        </g>
+      </svg>
+      <div class="footer">
+        拖拽空白区以平移，滚轮缩放；双击节点可重命名；<span class="kbd">Ctrl</span>+<span class="kbd">S</span> 导出 SVG
+      </div>
+    </div>
+  </div>
+<script>
+// ======= 简单数据模型 =======
+function makeNode(text){return {id:crypto.randomUUID(), text, note:"", children:[]}}
+function makeDoc(title){return {root:{id:"root", text:title||"主题", children:[]}, meta:{title:title||"主题", created:new Date().toISOString(), modified:new Date().toISOString()}}}
+
+// ======= 中文大纲解析 =======
+const Rx = {
+  l1: /^(?:第?[一二三四五六七八九十百千]+[章节条]|[一二三四五六七八九十]+、)\s*/,
+  l2: /^（[一二三四五六七八九十]+）\s*/,
+  num: /^(?:\d+[\.、）])\s*/,
+  circ: /^（?\d+）\s*/,
+  roman: /^(?:[IVXivx]+[\.、）])\s*/,
+  bullet: /^[\-\*•·]\s+/, // markdown 列表符
+}
+function levelByPattern(line, indent){
+  if(Rx.l1.test(line)) return 1;
+  if(Rx.l2.test(line)) return 2;
+  if(Rx.num.test(line) || Rx.circ.test(line) || Rx.roman.test(line)) return 3;
+  if(Rx.bullet.test(line)) return Math.max(4, Math.floor(indent/2)+3);
+  return Math.floor(indent/2)+1; // 以缩进兜底
+}
+function stripMarker(line){
+  return line.replace(/^((第?[一二三四五六七八九十百千]+[章节条])|([一二三四五六七八九十]+、)|(（[一二三四五六七八九十]+）)|(\d+[\.、）])|(（?\d+）)|([IVXivx]+[\.、）])|([\-\*•·]))\s*/,"")
+}
+function parseTextToDoc(text, title){
+  const lines = text.replace(/\r\n?/g,'\n').split('\n');
+  const doc = makeDoc(title||"主题");
+  const stack = [{lvl:0, node:doc.root}];
+  for(let raw of lines){
+    const indent = (raw.match(/^\s*/)||[''])[0].length; let line = raw.trim();
+    if(!line) continue; const lvl = levelByPattern(line, indent); line = stripMarker(line);
+    const node = makeNode(line);
+    while(stack.length && stack[stack.length-1].lvl >= lvl) stack.pop();
+    stack[stack.length-1].node.children.push(node); stack.push({lvl, node});
+  }
+  return doc;
+}
+
+// ======= 布局（左右树 / 径向） =======
+function layoutLR(doc){
+  const nodeSize = (n)=>{ // 简单文本测宽
+    const len = Math.min(36, n.text.length);
+    const w = 20 + len*8; const h = 34; return {w, h}
+  }
+  let yCursor = 0; const gapX=120, gapY=14;
+  function dfs(node, depth){
+    const kids = node.children||[]; const boxes = kids.map(k=>dfs(k, depth+1));
+    const size = nodeSize(node);
+    let y;
+    if(kids.length===0){ y = yCursor; yCursor += size.h + gapY }
+    else { const top = boxes[0].y; const bot = boxes[boxes.length-1].y; y = (top+bot)/2 }
+    const x = depth*gapX;
+    return node._box = {x,y,w:size.w,h:size.h}
+  }
+  dfs(doc.root,0);
+  return doc;
+}
+function layoutRadial(doc){
+  const R0=30, Rstep=120; const center={x:600,y:400}
+  function walk(node, depth, startAng, endAng){
+    const angle = (startAng+endAng)/2; const r = R0 + depth*Rstep;
+    node._box = {w:Math.min(260, 20+node.text.length*8), h:34};
+    node._box.x = center.x + r*Math.cos(angle) - node._box.w/2;
+    node._box.y = center.y + r*Math.sin(angle) - node._box.h/2;
+    const kids = node.children||[]; if(!kids.length) return;
+    let span = endAng-startAng; const step = span/Math.max(1,kids.length);
+    let s = startAng; for(const k of kids){ const e = s+step; walk(k, depth+1, s, e); s=e }
+  }
+  const childs = doc.root.children||[]; const step = (Math.PI*2)/Math.max(1, childs.length);
+  let s= -Math.PI/2; for(const k of childs){ const e=s+step; walk(k,1,s,e); s=e }
+  doc.root._box={x:600-60,y:400-20,w:120,h:40};
+  return doc;
+}
+
+// ======= 渲染到 SVG =======
+const svg = document.getElementById('svg');
+const gEdges = document.getElementById('edges');
+const gNodes = document.getElementById('nodes');
+let view = {x:0,y:0,w:1400,h:900};
+function setView(){ svg.setAttribute('viewBox', `${view.x} ${view.y} ${view.w} ${view.h}`) }
+setView();
+
+function clearSVG(){ gEdges.innerHTML=''; gNodes.innerHTML=''; }
+function addEdge(x1,y1,x2,y2){
+  const dx= (x2-x1)*.6; const d = `M${x1},${y1} C ${x1+dx},${y1} ${x2-dx},${y2} ${x2},${y2}`;
+  const p = document.createElementNS('http://www.w3.org/2000/svg','path');
+  p.setAttribute('d', d); p.setAttribute('class','edge'); gEdges.appendChild(p);
+}
+function renderDoc(doc){
+  clearSVG();
+  traverse(doc.root, (n,p)=>{
+    if(p){ const a = anchor(p), b = anchor(n); addEdge(a.x,a.y,b.x,b.y); }
+  });
+  traverse(doc.root, (n)=>{
+    const g = nodeGroup(n); gNodes.appendChild(g);
+  })
+}
+function anchor(n){ return {x: n._box.x + (n===currentDoc.root ? n._box.w/2 : n._box.w), y: n._box.y + n._box.h/2} }
+function nodeGroup(n){
+  const g=document.createElementNS('http://www.w3.org/2000/svg','g'); g.setAttribute('class','node'); g.dataset.id=n.id;
+  const {x,y,w,h}=n._box; const r=8;
+  const rect=document.createElementNS('http://www.w3.org/2000/svg','rect'); rect.setAttribute('x',x); rect.setAttribute('y',y); rect.setAttribute('rx',r); rect.setAttribute('ry',r); rect.setAttribute('width',w); rect.setAttribute('height',h);
+  const text=document.createElementNS('http://www.w3.org/2000/svg','text'); text.setAttribute('x',x+10); text.setAttribute('y',y+22); text.textContent = n.text;
+  g.appendChild(rect); g.appendChild(text);
+  g.addEventListener('dblclick',()=>renameNode(n));
+  g.addEventListener('click',()=>selectNode(g));
+  return g;
+}
+function selectNode(g){ document.querySelectorAll('.node.selected').forEach(n=>n.classList.remove('selected')); g.classList.add('selected'); }
+function traverse(n, fn, parent=null){ fn(n,parent); (n.children||[]).forEach(ch=>traverse(ch, fn, n)); }
+
+// ======= 导入/导出 =======
+function exportOPML(doc){
+  function toOutline(n){ return { $:{ text:n.text }, outline: (n.children||[]).map(toOutline) } }
+  const headTitle = doc.meta.title||'WinMind';
+  const body = doc.root.children.map(toOutline);
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<opml version="2.0"><head><title>${esc(headTitle)}</title></head><body>${outlineXML(body)}</body></opml>`;
+  download('mind.opml', xml, 'text/xml');
+}
+function outlineXML(arr){ return arr.map(o=>`<outline text="${esc(o.$.text)}">${o.outline?outlineXML(o.outline):''}</outline>`).join('') }
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;') }
+
+function exportMM(doc){
+  let xml = `<?xml version="1.0" encoding="UTF-8"?>\n<map version="1.0.1">`;
+  function nodeMM(n){ let s = `<node TEXT="${esc(n.text)}">`; (n.children||[]).forEach(c=>s+=nodeMM(c)); s+=`</node>`; return s }
+  xml += nodeMM(doc.root); xml += `</map>`; download('mind.mm', xml, 'text/xml');
+}
+function exportMD(doc){
+  let out = `# ${doc.meta.title||'主题'}\n`;
+  function walk(n, depth){ if(n===doc.root) { (n.children||[]).forEach(ch=>walk(ch,0)); return }
+    out += `${'  '.repeat(depth)}- ${n.text}\n`; (n.children||[]).forEach(ch=>walk(ch, depth+1)); }
+  walk(doc.root,0); download('mind.md', out, 'text/markdown');
+}
+function exportSVG(){
+  const serializer = new XMLSerializer(); const s = serializer.serializeToString(svg);
+  download('mind.svg', s, 'image/svg+xml');
+}
+function exportPNG(){
+  const serializer = new XMLSerializer(); const s = serializer.serializeToString(svg);
+  const img = new Image(); const svg64 = 'data:image/svg+xml;base64,'+btoa(unescape(encodeURIComponent(s)));
+  img.onload = ()=>{
+    const canvas = document.createElement('canvas'); canvas.width = 2000; canvas.height = 1200; const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0,0, canvas.width, canvas.height); const url = canvas.toDataURL('image/png');
+    const a=document.createElement('a'); a.href=url; a.download='mind.png'; a.click();
+  }; img.src = svg64;
+}
+function download(name, content, mime){ const blob = new Blob([content], {type:mime}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(url), 1000) }
+
+// 导入：OPML / FreeMind .mm / Markdown
+async function importFile(file){ const ext = file.name.toLowerCase().split('.').pop(); const text = await file.text();
+  if(ext==='opml') currentDoc = importOPML(text);
+  else if(ext==='mm') currentDoc = importMM(text);
+  else if(ext==='md' || ext==='markdown' || ext==='txt') currentDoc = parseTextToDoc(text, file.name.replace(/\.[^.]+$/, ''));
+  else if(ext==='svg' || ext==='json') { alert('SVG/JSON 仅供导出或未来版本导入'); return }
+  else { currentDoc = parseTextToDoc(text, file.name) }
+  refresh(true);
+}
+function importOPML(xml){
+  const d = new DOMParser().parseFromString(xml,'text/xml'); const doc = makeDoc(d.querySelector('head>title')?.textContent || 'OPML');
+  function walk(out){ const node = makeNode(out.getAttribute('text')||out.getAttribute('title')||'');
+    node.children = [...out.children].filter(x=>x.tagName.toLowerCase()==='outline').map(walk); return node }
+  doc.root.children = [...d.querySelectorAll('body>outline')].map(walk); return doc;
+}
+function importMM(xml){
+  const d = new DOMParser().parseFromString(xml,'text/xml'); const doc = makeDoc('FreeMind');
+  function walk(x){ const node = makeNode(x.getAttribute('TEXT')||''); node.children = [...x.children].filter(c=>c.tagName==='node').map(walk); return node }
+  const root = d.querySelector('map>node'); doc.root = walk(root); return doc;
+}
+
+// ======= 编辑与交互 =======
+function renameNode(n){
+  const nv = prompt('重命名节点', n.text); if(nv==null) return; n.text = nv; refresh(false);
+}
+
+// 视图交互：平移 & 缩放
+let panning=false, last={x:0,y:0};
+svg.addEventListener('mousedown',e=>{ if(e.target===svg){ panning=true; last={x:e.clientX,y:e.clientY}; svg.style.cursor='grabbing' } });
+window.addEventListener('mouseup',()=>{ panning=false; svg.style.cursor='default' });
+window.addEventListener('mousemove',e=>{ if(!panning) return; const dx = (e.clientX-last.x)*(view.w/svg.clientWidth); const dy=(e.clientY-last.y)*(view.h/svg.clientHeight); view.x -= dx; view.y -= dy; last={x:e.clientX,y:e.clientY}; setView() });
+svg.addEventListener('wheel',e=>{ e.preventDefault(); const scale = Math.exp(-e.deltaY*0.001);
+  const mx = view.x + e.offsetX*(view.w/svg.clientWidth); const my = view.y + e.offsetY*(view.h/svg.clientHeight);
+  view.w *= 1/scale; view.h *= 1/scale; view.x = mx - (e.offsetX*(view.w/svg.clientWidth)); view.y = my - (e.offsetY*(view.h/svg.clientHeight)); setView(); }, {passive:false});
+
+// 快捷键
+window.addEventListener('keydown',e=>{ if(e.key==='s' && (e.ctrlKey||e.metaKey)){ e.preventDefault(); exportSVG(); }});
+
+// ======= 渲染循环 =======
+const src = document.getElementById('src');
+const msEl = document.getElementById('ms');
+const autoChk = document.getElementById('autoChk');
+const layoutSel = document.getElementById('layoutSel');
+let currentDoc = parseTextToDoc(sampleText(), '示例');
+function refresh(recenter){
+  const t0 = performance.now();
+  // 从文本同步（若勾选自动）
+  if(autoChk.checked){ currentDoc = parseTextToDoc(src.value, '主题'); currentDoc.meta.title = '主题' }
+  // 布局
+  layoutSel.value==='radial' ? layoutRadial(currentDoc) : layoutLR(currentDoc);
+  // 渲染
+  renderDoc(currentDoc);
+  if(recenter){ view={x:-50,y:-50,w:1400,h:900}; setView(); }
+  msEl.textContent = Math.round(performance.now()-t0);
+}
+let typingTimer=null; src.addEventListener('input',()=>{ if(!autoChk.checked) return; if(typingTimer) cancelAnimationFrame(typingTimer); typingTimer = requestAnimationFrame(()=>refresh(false)) });
+layoutSel.addEventListener('change',()=>refresh(false));
+
+document.getElementById('btnExportOPML').onclick=()=>exportOPML(currentDoc);
+document.getElementById('btnExportMM').onclick=()=>exportMM(currentDoc);
+document.getElementById('btnExportMD').onclick=()=>exportMD(currentDoc);
+document.getElementById('btnExportSVG').onclick=()=>exportSVG();
+document.getElementById('btnExportPNG').onclick=()=>exportPNG();
+
+const fileInput = document.getElementById('fileInput');
+fileInput.addEventListener('change',()=>{ const f=fileInput.files[0]; if(f) importFile(f) });
+svg.addEventListener('dragover',e=>{ e.preventDefault(); svg.style.outline='2px dashed var(--accent)' });
+svg.addEventListener('dragleave',()=> svg.style.outline='none');
+svg.addEventListener('drop',e=>{ e.preventDefault(); svg.style.outline='none'; const f=e.dataTransfer.files[0]; if(f) importFile(f) });
+
+// 初始文本
+function sampleText(){ return `一、产品目标
+（一）像 WPS 一样：左文右图，所写即所图
+1. 中文大纲鲁棒解析
+2. 本地离线、隐私优先
+（二）格式“全家桶”导入导出
+1. OPML / FreeMind(.mm)
+2. Markdown / SVG / PNG
+3. 未来：XMind（需 Zip 封装）
+二、关键场景
+（一）会议纪要 ➜ 思维导图
+1. 拖拽微调结构
+2. 一键导出分享
+三、路线
+（一）MVP：解析 + 左右树 + 导出
+（二）进阶：径向布局与兼容增强` }
+
+// 初始化
+src.value = sampleText(); refresh(true);
+</script>
+</body>
+</html>
